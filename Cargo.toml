@@ -1,0 +1,24 @@
+[package]
+name = "rust_tryon_engine"
+version = "0.1.0"
+edition = "2021"
+description = "Real-time virtual clothing try-on core engine in Rust for mobile cameras (Android/iOS)"
+
+[lib]
+name = "rust_tryon_engine"
+# cdylib để build file .so (Android) / .dylib/.a (iOS), rlib để test trên máy tính
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# ONNX Runtime cho Rust (hỗ trợ XNNPACK, NNAPI trên Android, CoreML trên iOS)
+ort = { version = "2.0.0-rc.9", features = ["ndarray"] }
+ndarray = "0.16"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# JNI bindings cho Android (Kotlin/Java gọi trực tiếp DirectByteBuffer & ByteArray)
+jni = "0.21"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

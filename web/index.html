@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Rust Try-On" />
+  <meta name="theme-color" content="#09090b" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <title>Rust AI Virtual Try-On (iPhone Safari)</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+  <style>
+    :root {
+      --bg: #09090b;
+      --panel: rgba(12, 12, 16, 0.72);
+      --border: rgba(255, 255, 255, 0.14);
+      --accent: #4ade80;
+      --text: #fafafa;
+      --muted: #a1a1aa;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+    }
+    #app {
+      position: relative;
+      width: 100vw;
+      height: 100dvh;
+      background: #000;
+    }
+    #camVideo {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #outputCanvas {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .top-hud {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: calc(env(safe-area-inset-top, 12px) + 10px) 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .fps-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: var(--text);
+      padding: 8px 13px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: #2563eb;
+      border-color: #3b82f6;
+      color: #fff;
+    }
+    .banner {
+      background: rgba(180, 83, 9, 0.86);
+      border: 1px solid rgba(251, 191, 36, 0.4);
+      border-radius: 12px;
+      padding: 8px 12px;
+      font-size: 12px;
+      line-height: 1.4;
+      pointer-events: auto;
+    }
+    .banner.error {
+      background: rgba(185, 28, 28, 0.9);
+      border-color: rgba(248, 113, 113, 0.45);
+    }
+    .bottom-panel {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 12px 14px calc(env(safe-area-inset-bottom, 12px) + 12px);
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 70%, rgba(0, 0, 0, 0.45));
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .scroll-row {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      align-items: center;
+    }
+    .scroll-row::-webkit-scrollbar {
+      display: none;
+    }
+    .chip {
+      flex: 0 0 auto;
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .chip.active {
+      background: #fff;
+      color: #09090b;
+      border-color: #fff;
+      font-weight: 700;
+    }
+    .swatch {
+      flex: 0 0 auto;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      cursor: pointer;
+    }
+    .swatch.active {
+      border: 3px solid #fff;
+      transform: scale(1.08);
+    }
+    .shop-thumb {
+      flex: 0 0 auto;
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      background: #18181b;
+      cursor: pointer;
+      padding: 0;
+    }
+    .shop-thumb.active {
+      border-color: var(--accent);
+    }
+    .shop-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .actions-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .toggle-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #startOverlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 9, 11, 0.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      gap: 14px;
+      z-index: 20;
+    }
+    #startOverlay h1 {
+      margin: 0;
+      font-size: 20px;
+    }
+    #startOverlay p {
+      margin: 0;
+      max-width: 340px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <video id="camVideo" autoplay playsinline webkit-playsinline muted></video>
+    <canvas id="outputCanvas"></canvas>
+
+    <div id="startOverlay">
+      <h1>Thử Quần Áo Real-Time (Safari iPhone)</h1>
+      <p>
+        Chạy trực tiếp bằng camera iPhone qua HTTPS + ONNX Runtime Web (không cần Mac hay cài .ipa).
+      </p>
+      <button id="btnStartCamera" class="btn btn-primary" style="padding: 12px 22px; font-size: 15px;">
+        Bật Camera &amp; Bắt đầu
+      </button>
+      <p id="startError" style="color: #f87171; font-size: 12px;"></p>
+    </div>
+
+    <div class="top-hud">
+      <div class="hud-row">
+        <div class="pill">
+          <span class="fps-dot"></span>
+          <span id="fpsLabel">0 FPS</span>
+          <span style="color: var(--muted);">•</span>
+          <span id="modeLabel" style="color: var(--accent);">Khởi tạo...</span>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button id="btnFlipCam" class="btn">Cam Sau</button>
+          <button id="btnLoadOnnx" class="btn">Nạp .onnx</button>
+        </div>
+      </div>
+
+      <div id="statusBanner" class="banner hidden"></div>
+    </div>
+
+    <div class="bottom-panel">
+      <div id="categoryRow" class="scroll-row"></div>
+
+      <div id="garmentRow" class="scroll-row"></div>
+
+      <div class="actions-row">
+        <label class="toggle-label">
+          <input id="chkRemoveBg" type="checkbox" checked />
+          Tách nền sáng ảnh Shop
+        </label>
+        <button id="btnPickGarment" class="btn btn-primary">Chọn ảnh PNG</button>
+      </div>
+    </div>
+
+    <input id="fileOnnx" type="file" accept=".onnx" class="hidden" />
+    <input id="fileGarment" type="file" accept="image/*" class="hidden" />
+  </div>
+
+  <script type="module">
+    import { GARMENT_CATEGORIES, TryOnWebEngine } from "./tryon_web_engine.js";
+
+    const SWATCHES = [
+      { name: "Đỏ Ruby", hex: "#E53935" },
+      { name: "Xanh Navy", hex: "#1E3A8A" },
+      { name: "Xanh Rêu", hex: "#2E7D32" },
+      { name: "Vàng Nghệ", hex: "#F9A825" },
+      { name: "Tím Pastel", hex: "#7E57C2" },
+      { name: "Đen Carbon", hex: "#212121" },
+    ];
+
+    const video = document.getElementById("camVideo");
+    const canvas = document.getElementById("outputCanvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    const startOverlay = document.getElementById("startOverlay");
+    const btnStartCamera = document.getElementById("btnStartCamera");
+    const startError = document.getElementById("startError");
+    const fpsLabel = document.getElementById("fpsLabel");
+    const modeLabel = document.getElementById("modeLabel");
+    const statusBanner = document.getElementById("statusBanner");
+    const btnFlipCam = document.getElementById("btnFlipCam");
+    const btnLoadOnnx = document.getElementById("btnLoadOnnx");
+    const btnPickGarment = document.getElementById("btnPickGarment");
+    const fileOnnx = document.getElementById("fileOnnx");
+    const fileGarment = document.getElementById("fileGarment");
+    const chkRemoveBg = document.getElementById("chkRemoveBg");
+    const categoryRow = document.getElementById("categoryRow");
+    const garmentRow = document.getElementById("garmentRow");
+
+    const engine = new TryOnWebEngine();
+    let activeCategory = 0;
+    let activeSwatchHex = SWATCHES[0].hex;
+    let activeShopUrl = null;
+    let facingMode = "user";
+    let mediaStream = null;
+    let datasetItems = [];
+    let running = false;
+
+    let frameCounter = 0;
+    let lastFpsTick = performance.now();
+
+    function showBanner(msg, isError = false) {
+      if (!msg) {
+        statusBanner.classList.add("hidden");
+        statusBanner.textContent = "";
+        return;
+      }
+      statusBanner.textContent = msg;
+      statusBanner.classList.toggle("error", isError);
+      statusBanner.classList.remove("hidden");
+    }
+
+    function renderCategories() {
+      categoryRow.innerHTML = "";
+      for (const cat of GARMENT_CATEGORIES) {
+        const btn = document.createElement("button");
+        btn.className = `chip ${cat.id === activeCategory ? "active" : ""}`;
+        btn.textContent = cat.label;
+        btn.onclick = () => {
+          activeCategory = cat.id;
+          activeShopUrl = null;
+          engine.setSampleGarment(activeCategory, activeSwatchHex);
+          renderCategories();
+          renderGarments();
+        };
+        categoryRow.appendChild(btn);
+      }
+    }
+
+    function renderGarments() {
+      garmentRow.innerHTML = "";
+      for (const sw of SWATCHES) {
+        const div = document.createElement("button");
+        div.className = `swatch ${!activeShopUrl && activeSwatchHex === sw.hex ? "active" : ""}`;
+        div.style.background = sw.hex;
+        div.title = sw.name;
+        div.onclick = () => {
+          activeShopUrl = null;
+          activeSwatchHex = sw.hex;
+          engine.setSampleGarment(activeCategory, sw.hex);
+          renderGarments();
+        };
+        garmentRow.appendChild(div);
+      }
+
+      const matching = datasetItems.filter((item) => item.class_id === activeCategory);
+      for (const item of matching) {
+        const url = `/${item.file}`;
+        const btn = document.createElement("button");
+        btn.className = `shop-thumb ${activeShopUrl === url ? "active" : ""}`;
+        btn.title = item.title;
+
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = item.title;
+        img.loading = "lazy";
+        btn.appendChild(img);
+
+        btn.onclick = () => {
+          activeShopUrl = url;
+          if (img.complete && img.naturalWidth > 0) {
+            engine.setGarmentFromSource(img, chkRemoveBg.checked);
+          } else {
+            img.onload = () => engine.setGarmentFromSource(img, chkRemoveBg.checked);
+          }
+          renderGarments();
+        };
+        garmentRow.appendChild(btn);
+      }
+    }
+
+    async function loadDatasetManifest() {
+      try {
+        const resp = await fetch("/api/dataset");
+        if (!resp.ok) return;
+        const payload = await resp.json();
+        if (Array.isArray(payload.items)) {
+          datasetItems = payload.items;
+          renderGarments();
+        }
+      } catch {
+        // Bỏ qua nếu mở tĩnh không có server API
+      }
+    }
+
+    async function initEngine() {
+      await engine.tryLoadRustWasm();
+      engine.setSampleGarment(activeCategory, activeSwatchHex);
+
+      try {
+        const provider = await engine.loadModel("./yolo11n_seg_clothes.onnx");
+        modeLabel.textContent = provider;
+        showBanner(null);
+      } catch {
+        modeLabel.textContent = "Smart Preview";
+        showBanner(
+          "Chưa có web/yolo11n_seg_clothes.onnx — đang chạy Smart Preview. Bấm 'Nạp .onnx' sau khi export từ Colab."
+        );
+      }
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error(
+          "Safari iPhone yêu cầu truy cập qua HTTPS (ví dụ https://<IP-Windows>:8443) để mở Camera."
+        );
+      }
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((t) => t.stop());
+      }
+
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+      });
+
+      video.srcObject = mediaStream;
+      await video.play();
+      startOverlay.classList.add("hidden");
+      running = true;
+      requestAnimationFrame(processLoop);
+    }
+
+    async function processLoop() {
+      if (!running) return;
+
+      if (video.readyState >= 2 && video.videoWidth > 0 && !engine.isBusy) {
+        engine.isBusy = true;
+        try {
+          const w = video.videoWidth;
+          const h = video.videoHeight;
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+          }
+
+          ctx.save();
+          if (facingMode === "user") {
+            ctx.translate(w, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(video, 0, 0, w, h);
+          ctx.restore();
+
+          const frameData = ctx.getImageData(0, 0, w, h);
+          const res = await engine.processFrame(frameData, activeCategory);
+          if (res.detected) {
+            ctx.putImageData(frameData, 0, 0);
+          }
+          modeLabel.textContent = res.mode;
+
+          frameCounter++;
+          const now = performance.now();
+          if (now - lastFpsTick >= 1000) {
+            fpsLabel.textContent = `${frameCounter} FPS`;
+            frameCounter = 0;
+            lastFpsTick = now;
+          }
+        } catch (err) {
+          console.error(err);
+        } finally {
+          engine.isBusy = false;
+        }
+      }
+
+      requestAnimationFrame(processLoop);
+    }
+
+    btnStartCamera.onclick = async () => {
+      startError.textContent = "";
+      try {
+        await startCamera();
+      } catch (err) {
+        startError.textContent = err.message || "Không thể truy cập camera.";
+      }
+    };
+
+    btnFlipCam.onclick = async () => {
+      facingMode = facingMode === "user" ? "environment" : "user";
+      btnFlipCam.textContent = facingMode === "user" ? "Cam Sau" : "Cam Trước";
+      try {
+        await startCamera();
+      } catch (err) {
+        showBanner(err.message, true);
+      }
+    };
+
+    btnLoadOnnx.onclick = () => fileOnnx.click();
+    fileOnnx.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        modeLabel.textContent = "Đang nạp...";
+        const buf = await file.arrayBuffer();
+        const provider = await engine.loadModel(buf);
+        modeLabel.textContent = provider;
+        showBanner(null);
+      } catch (err) {
+        showBanner(`Lỗi nạp .onnx: ${err.message}`, true);
+      }
+    };
+
+    btnPickGarment.onclick = () => fileGarment.click();
+    fileGarment.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        activeShopUrl = null;
+        engine.setGarmentFromSource(img, chkRemoveBg.checked);
+        URL.revokeObjectURL(url);
+        renderGarments();
+      };
+      img.src = url;
+    };
+
+    renderCategories();
+    renderGarments();
+    loadDatasetManifest();
+    initEngine();
+  </script>
+</body>
+</html>

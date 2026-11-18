@@ -79,11 +79,14 @@ class TryOnController(private val context: Context) : AutoCloseable {
     private var garmentWidth: Int = 0
     private var garmentHeight: Int = 0
 
-    // Buffer tái sử dụng qua từng frame để hạn chế GC
+    // Buffer tái sử dụng qua từng frame để hạn chế GC (double-buffer outputBitmap)
     private var frameDirectBuffer: ByteBuffer? = null
     private var packedRowBuffer: ByteArray? = null
     private var rawBitmap: Bitmap? = null
     private var uprightBitmap: Bitmap? = null
+    private val outputBitmaps = arrayOfNulls<Bitmap>(2)
+    private var outputBitmapIndex = 0
+    private val transformMatrix = Matrix()
 
     var isReady: Boolean = false
         private set
@@ -196,7 +199,7 @@ class TryOnController(private val context: Context) : AutoCloseable {
                     )
                     srcBuffer.rewind()
                 }
-                val outBmp = Bitmap.createBitmap(srcW, srcH, Bitmap.Config.ARGB_8888)
+                val outBmp = nextOutputBitmap(srcW, srcH)
                 outBmp.copyPixelsFromBuffer(srcBuffer)
                 return outBmp
             }
@@ -219,13 +222,12 @@ class TryOnController(private val context: Context) : AutoCloseable {
             val outH = if (rotation == 90 || rotation == 270) srcW else srcH
             val upright = ensureUprightBitmap(outW, outH)
 
-            val matrix = Matrix().apply {
-                postTranslate(-srcW / 2f, -srcH / 2f)
-                if (rotation != 0) postRotate(rotation.toFloat())
-                if (mirrorHorizontal) postScale(-1f, 1f)
-                postTranslate(outW / 2f, outH / 2f)
-            }
-            Canvas(upright).drawBitmap(raw, matrix, null)
+            transformMatrix.reset()
+            transformMatrix.postTranslate(-srcW / 2f, -srcH / 2f)
+            if (rotation != 0) transformMatrix.postRotate(rotation.toFloat())
+            if (mirrorHorizontal) transformMatrix.postScale(-1f, 1f)
+            transformMatrix.postTranslate(outW / 2f, outH / 2f)
+            Canvas(upright).drawBitmap(raw, transformMatrix, null)
 
             val directBuf = ensureFrameDirectBuffer(outW * outH * 4)
             directBuf.rewind()
@@ -246,7 +248,7 @@ class TryOnController(private val context: Context) : AutoCloseable {
                 directBuf.rewind()
             }
 
-            val resultBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            val resultBitmap = nextOutputBitmap(outW, outH)
             resultBitmap.copyPixelsFromBuffer(directBuf)
             return resultBitmap
         }
@@ -263,7 +265,22 @@ class TryOnController(private val context: Context) : AutoCloseable {
             rawBitmap = null
             uprightBitmap?.recycle()
             uprightBitmap = null
+            outputBitmaps[0]?.recycle()
+            outputBitmaps[0] = null
+            outputBitmaps[1]?.recycle()
+            outputBitmaps[1] = null
         }
+    }
+
+    private fun nextOutputBitmap(w: Int, h: Int): Bitmap {
+        val idx = outputBitmapIndex
+        outputBitmapIndex = 1 - outputBitmapIndex
+        val existing = outputBitmaps[idx]
+        if (existing != null && existing.width == w && existing.height == h) {
+            return existing
+        }
+        existing?.recycle()
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { outputBitmaps[idx] = it }
     }
 
     private fun ensureAssetCopied(assetName: String): File {

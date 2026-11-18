@@ -11,12 +11,12 @@
   <meta name="apple-mobile-web-app-title" content="Rust Try-On" />
   <meta name="theme-color" content="#09090b" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <title>Rust AI Virtual Try-On (iPhone Safari)</title>
+  <title>Rust AI Virtual Try-On (60 FPS Safari)</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
   <style>
     :root {
       --bg: #09090b;
-      --panel: rgba(12, 12, 16, 0.72);
+      --panel: rgba(12, 12, 16, 0.74);
       --border: rgba(255, 255, 255, 0.14);
       --accent: #4ade80;
       --text: #fafafa;
@@ -131,12 +131,12 @@
       right: 0;
       bottom: 0;
       padding: 12px 14px calc(env(safe-area-inset-bottom, 12px) + 12px);
-      background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 70%, rgba(0, 0, 0, 0.45));
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 70%, rgba(0, 0, 0, 0.45));
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 9px;
     }
     .scroll-row {
       display: flex;
@@ -151,12 +151,12 @@
     }
     .chip {
       flex: 0 0 auto;
-      padding: 7px 14px;
+      padding: 6px 13px;
       border-radius: 999px;
       border: 1px solid var(--border);
       background: rgba(255, 255, 255, 0.1);
       color: var(--text);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
       cursor: pointer;
     }
@@ -179,15 +179,16 @@
       transform: scale(1.08);
     }
     .shop-thumb {
+      position: relative;
       flex: 0 0 auto;
-      width: 48px;
-      height: 48px;
+      width: 50px;
+      height: 58px;
       border-radius: 10px;
       overflow: hidden;
       border: 2px solid rgba(255, 255, 255, 0.22);
-      background: #18181b;
+      background: rgba(255, 255, 255, 0.1);
       cursor: pointer;
-      padding: 0;
+      padding: 2px;
     }
     .shop-thumb.active {
       border-color: var(--accent);
@@ -195,8 +196,19 @@
     .shop-thumb img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
       display: block;
+    }
+    .gender-badge {
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-size: 9px;
+      font-weight: 700;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
     }
     .actions-row {
       display: flex;
@@ -246,9 +258,9 @@
     <canvas id="outputCanvas"></canvas>
 
     <div id="startOverlay">
-      <h1>Thử Quần Áo Real-Time (Safari iPhone)</h1>
+      <h1>Thử Quần Áo Real-Time (60 FPS)</h1>
       <p>
-        Chạy trực tiếp bằng camera iPhone qua HTTPS + ONNX Runtime Web (không cần Mac hay cài .ipa).
+        Bộ đồ Nam &amp; Nữ tách nền sẵn + ONNX chạy bất đồng bộ để camera Safari iPhone luôn mượt 30–60 FPS.
       </p>
       <button id="btnStartCamera" class="btn btn-primary" style="padding: 12px 22px; font-size: 15px;">
         Bật Camera &amp; Bắt đầu
@@ -262,7 +274,7 @@
           <span class="fps-dot"></span>
           <span id="fpsLabel">0 FPS</span>
           <span style="color: var(--muted);">•</span>
-          <span id="modeLabel" style="color: var(--accent);">Khởi tạo...</span>
+          <span id="aiStatsLabel" style="color: var(--accent);">Khởi tạo...</span>
         </div>
         <div style="display: flex; gap: 6px;">
           <button id="btnFlipCam" class="btn">Cam Sau</button>
@@ -274,14 +286,17 @@
     </div>
 
     <div class="bottom-panel">
-      <div id="categoryRow" class="scroll-row"></div>
+      <div class="scroll-row" style="justify-content: space-between;">
+        <div id="categoryRow" class="scroll-row"></div>
+        <div id="genderRow" class="scroll-row"></div>
+      </div>
 
       <div id="garmentRow" class="scroll-row"></div>
 
       <div class="actions-row">
         <label class="toggle-label">
           <input id="chkRemoveBg" type="checkbox" checked />
-          Tách nền sáng ảnh Shop
+          Tự tách nền khi tải ảnh mới
         </label>
         <button id="btnPickGarment" class="btn btn-primary">Chọn ảnh PNG</button>
       </div>
@@ -303,15 +318,21 @@
       { name: "Đen Carbon", hex: "#212121" },
     ];
 
+    const GENDER_FILTERS = [
+      { key: "all", label: "Tất cả" },
+      { key: "men", label: "Nam" },
+      { key: "women", label: "Nữ" },
+    ];
+
     const video = document.getElementById("camVideo");
     const canvas = document.getElementById("outputCanvas");
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const ctx = canvas.getContext("2d", { alpha: false });
 
     const startOverlay = document.getElementById("startOverlay");
     const btnStartCamera = document.getElementById("btnStartCamera");
     const startError = document.getElementById("startError");
     const fpsLabel = document.getElementById("fpsLabel");
-    const modeLabel = document.getElementById("modeLabel");
+    const aiStatsLabel = document.getElementById("aiStatsLabel");
     const statusBanner = document.getElementById("statusBanner");
     const btnFlipCam = document.getElementById("btnFlipCam");
     const btnLoadOnnx = document.getElementById("btnLoadOnnx");
@@ -320,12 +341,14 @@
     const fileGarment = document.getElementById("fileGarment");
     const chkRemoveBg = document.getElementById("chkRemoveBg");
     const categoryRow = document.getElementById("categoryRow");
+    const genderRow = document.getElementById("genderRow");
     const garmentRow = document.getElementById("garmentRow");
 
     const engine = new TryOnWebEngine();
     let activeCategory = 0;
+    let activeGender = "all";
     let activeSwatchHex = SWATCHES[0].hex;
-    let activeShopUrl = null;
+    let activeItemUrl = null;
     let facingMode = "user";
     let mediaStream = null;
     let datasetItems = [];
@@ -353,7 +376,7 @@
         btn.textContent = cat.label;
         btn.onclick = () => {
           activeCategory = cat.id;
-          activeShopUrl = null;
+          activeItemUrl = null;
           engine.setSampleGarment(activeCategory, activeSwatchHex);
           renderCategories();
           renderGarments();
@@ -362,15 +385,30 @@
       }
     }
 
+    function renderGenderFilters() {
+      genderRow.innerHTML = "";
+      for (const gf of GENDER_FILTERS) {
+        const btn = document.createElement("button");
+        btn.className = `chip ${gf.key === activeGender ? "active" : ""}`;
+        btn.textContent = gf.label;
+        btn.onclick = () => {
+          activeGender = gf.key;
+          renderGenderFilters();
+          renderGarments();
+        };
+        genderRow.appendChild(btn);
+      }
+    }
+
     function renderGarments() {
       garmentRow.innerHTML = "";
       for (const sw of SWATCHES) {
         const div = document.createElement("button");
-        div.className = `swatch ${!activeShopUrl && activeSwatchHex === sw.hex ? "active" : ""}`;
+        div.className = `swatch ${!activeItemUrl && activeSwatchHex === sw.hex ? "active" : ""}`;
         div.style.background = sw.hex;
         div.title = sw.name;
         div.onclick = () => {
-          activeShopUrl = null;
+          activeItemUrl = null;
           activeSwatchHex = sw.hex;
           engine.setSampleGarment(activeCategory, sw.hex);
           renderGarments();
@@ -378,12 +416,20 @@
         garmentRow.appendChild(div);
       }
 
-      const matching = datasetItems.filter((item) => item.class_id === activeCategory);
+      const matching = datasetItems.filter((item) => {
+        if (item.class_id !== activeCategory) return false;
+        if (activeGender !== "all" && item.gender !== activeGender) return false;
+        return true;
+      });
+
       for (const item of matching) {
-        const url = `/${item.file}`;
+        // Ưu tiên ảnh PNG đã tách nền sẵn trong `garments_rgba/`
+        const url = `/${item.rgba_file || item.file}`;
+        const usesRgba = Boolean(item.rgba_file);
+
         const btn = document.createElement("button");
-        btn.className = `shop-thumb ${activeShopUrl === url ? "active" : ""}`;
-        btn.title = item.title;
+        btn.className = `shop-thumb ${activeItemUrl === url ? "active" : ""}`;
+        btn.title = `${item.title} (${item.gender === "men" ? "Nam" : "Nữ"})`;
 
         const img = document.createElement("img");
         img.src = url;
@@ -391,12 +437,18 @@
         img.loading = "lazy";
         btn.appendChild(img);
 
+        const badge = document.createElement("span");
+        badge.className = "gender-badge";
+        badge.textContent = item.gender === "men" ? "Nam" : "Nữ";
+        btn.appendChild(badge);
+
         btn.onclick = () => {
-          activeShopUrl = url;
+          activeItemUrl = url;
+          const needRemoveBg = !usesRgba && chkRemoveBg.checked;
           if (img.complete && img.naturalWidth > 0) {
-            engine.setGarmentFromSource(img, chkRemoveBg.checked);
+            engine.setGarmentFromSource(img, needRemoveBg);
           } else {
-            img.onload = () => engine.setGarmentFromSource(img, chkRemoveBg.checked);
+            img.onload = () => engine.setGarmentFromSource(img, needRemoveBg);
           }
           renderGarments();
         };
@@ -414,7 +466,7 @@
           renderGarments();
         }
       } catch {
-        // Bỏ qua nếu mở tĩnh không có server API
+        // Bỏ qua nếu mở tĩnh
       }
     }
 
@@ -424,12 +476,12 @@
 
       try {
         const provider = await engine.loadModel("./yolo11n_seg_clothes.onnx");
-        modeLabel.textContent = provider;
+        aiStatsLabel.textContent = provider;
         showBanner(null);
       } catch {
-        modeLabel.textContent = "Smart Preview";
+        aiStatsLabel.textContent = "Smart Preview";
         showBanner(
-          "Chưa có web/yolo11n_seg_clothes.onnx — đang chạy Smart Preview. Bấm 'Nạp .onnx' sau khi export từ Colab."
+          "Chưa nạp được model .onnx — đang chạy Smart Preview. Bấm 'Nạp .onnx' để dùng model custom."
         );
       }
     }
@@ -451,59 +503,74 @@
           facingMode: { ideal: facingMode },
           width: { ideal: 640 },
           height: { ideal: 480 },
+          frameRate: { ideal: 30, max: 60 },
         },
       });
 
       video.srcObject = mediaStream;
       await video.play();
       startOverlay.classList.add("hidden");
-      running = true;
-      requestAnimationFrame(processLoop);
+
+      if (!running) {
+        running = true;
+        requestAnimationFrame(renderLoop);
+        scheduleAiLoop();
+      }
     }
 
-    async function processLoop() {
+    // Luồng 1: Render Camera + Overlay bằng GPU ở 60 FPS (tuyệt đối không chờ ONNX)
+    function renderLoop() {
       if (!running) return;
 
-      if (video.readyState >= 2 && video.videoWidth > 0 && !engine.isBusy) {
-        engine.isBusy = true;
-        try {
-          const w = video.videoWidth;
-          const h = video.videoHeight;
-          if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w;
-            canvas.height = h;
-          }
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
 
-          ctx.save();
-          if (facingMode === "user") {
-            ctx.translate(w, 0);
-            ctx.scale(-1, 1);
-          }
-          ctx.drawImage(video, 0, 0, w, h);
-          ctx.restore();
+        engine.renderCameraAndOverlay(
+          video,
+          ctx,
+          w,
+          h,
+          facingMode === "user",
+          activeCategory
+        );
 
-          const frameData = ctx.getImageData(0, 0, w, h);
-          const res = await engine.processFrame(frameData, activeCategory);
-          if (res.detected) {
-            ctx.putImageData(frameData, 0, 0);
+        frameCounter++;
+        const now = performance.now();
+        if (now - lastFpsTick >= 1000) {
+          fpsLabel.textContent = `${frameCounter} FPS`;
+          if (engine.hasModel) {
+            aiStatsLabel.textContent =
+              engine.lastAiMs > 0
+                ? `${engine.providerName} (${engine.lastAiMs}ms)`
+                : engine.providerName;
+          } else {
+            aiStatsLabel.textContent = "Smart Preview";
           }
-          modeLabel.textContent = res.mode;
-
-          frameCounter++;
-          const now = performance.now();
-          if (now - lastFpsTick >= 1000) {
-            fpsLabel.textContent = `${frameCounter} FPS`;
-            frameCounter = 0;
-            lastFpsTick = now;
-          }
-        } catch (err) {
-          console.error(err);
-        } finally {
-          engine.isBusy = false;
+          frameCounter = 0;
+          lastFpsTick = now;
         }
       }
 
-      requestAnimationFrame(processLoop);
+      requestAnimationFrame(renderLoop);
+    }
+
+    // Luồng 2: Suy luận AI bất đồng bộ (nhường CPU cho Safari render mượt mà)
+    async function scheduleAiLoop() {
+      while (running) {
+        if (engine.hasModel && video.readyState >= 2 && video.videoWidth > 0) {
+          await engine.runInferenceStep(
+            video,
+            facingMode === "user",
+            activeCategory
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 16));
+      }
     }
 
     btnStartCamera.onclick = async () => {
@@ -530,10 +597,10 @@
       const file = e.target.files?.[0];
       if (!file) return;
       try {
-        modeLabel.textContent = "Đang nạp...";
+        aiStatsLabel.textContent = "Đang nạp...";
         const buf = await file.arrayBuffer();
         const provider = await engine.loadModel(buf);
-        modeLabel.textContent = provider;
+        aiStatsLabel.textContent = provider;
         showBanner(null);
       } catch (err) {
         showBanner(`Lỗi nạp .onnx: ${err.message}`, true);
@@ -547,7 +614,7 @@
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
-        activeShopUrl = null;
+        activeItemUrl = null;
         engine.setGarmentFromSource(img, chkRemoveBg.checked);
         URL.revokeObjectURL(url);
         renderGarments();
@@ -556,6 +623,7 @@
     };
 
     renderCategories();
+    renderGenderFilters();
     renderGarments();
     loadDatasetManifest();
     initEngine();

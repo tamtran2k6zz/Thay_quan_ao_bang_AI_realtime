@@ -137,16 +137,16 @@ class TryOnRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/":
             req_path = "/index.html"
 
-        # Phục vụ ảnh dataset từ `clothes_dataset/images/...`
-        if req_path.startswith("/images/"):
+        # Phục vụ ảnh dataset & ảnh tách nền từ `clothes_dataset/{images,garments_rgba}/...`
+        if req_path.startswith("/images/") or req_path.startswith("/garments_rgba/"):
             target = (DATASET_DIR / req_path.lstrip("/")).resolve()
             if self._is_within(target, DATASET_DIR) and target.is_file():
                 self._serve_file(target)
                 return
-            self.send_error(404, "Dataset image not found")
+            self.send_error(404, "Dataset asset not found")
             return
 
-        # Phục vụ file tĩnh trong `web/` (hoặc fallback model .onnx ở thư mục gốc)
+        # Phục vụ file tĩnh trong `web/` (tự ánh xạ .onnx từ clothes_dataset/best.onnx nếu chưa copy vào web/)
         rel = req_path.lstrip("/")
         target = (WEB_DIR / rel).resolve()
         if self._is_within(target, WEB_DIR) and target.is_file():
@@ -154,10 +154,16 @@ class TryOnRequestHandler(BaseHTTPRequestHandler):
             return
 
         if rel.endswith(".onnx"):
-            root_onnx = (ROOT_DIR / Path(rel).name).resolve()
-            if self._is_within(root_onnx, ROOT_DIR) and root_onnx.is_file():
-                self._serve_file(root_onnx)
-                return
+            candidates = [
+                ROOT_DIR / Path(rel).name,
+                DATASET_DIR / Path(rel).name,
+                DATASET_DIR / "best.onnx",
+            ]
+            for cand in candidates:
+                resolved = cand.resolve()
+                if self._is_within(resolved, ROOT_DIR) and resolved.is_file():
+                    self._serve_file(resolved)
+                    return
 
         self.send_error(404, "Not found")
 
